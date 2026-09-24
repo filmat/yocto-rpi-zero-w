@@ -35,5 +35,10 @@ local_conf_header:
   license: |
     LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"
   debug: |
-    # root bez hasła -- ustawienie robocze, nie dla urządzenia w sieci
+    # passwordless root -- development setting, not for a networked device
     EXTRA_IMAGE_FEATURES += "debug-tweaks"
+  # By default downloads and sstate cache live in build/downloads and
+  # build/sstate-cache. To share them between build directories, uncomment:
+  # cache: |
+  #   DL_DIR = "/path/to/downloads"
+  #   SSTATE_DIR = "/path/to/sstate-cache"

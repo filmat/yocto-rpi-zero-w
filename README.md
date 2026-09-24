@@ -70,9 +70,7 @@ upstream overrides (e.g. the kernel defconfig) keep applying to it.
    ```
 
    The first build takes several hours. The image ends up in
-   `build/tmp/deploy/images/raspberrypi0-wifi-synth/`. To reuse existing
-   downloads and sstate cache from another build directory, export
-   `DL_DIR` and `SSTATE_DIR` before running `kas`.
+   `build/tmp/deploy/images/raspberrypi0-wifi-synth/`.
 
 `kas` creates `build/`, generates `conf/local.conf` and `conf/bblayers.conf`
 from `kas.yml` and loads the build environment (the equivalent of
@@ -89,14 +87,39 @@ kas shell kas.yml
 
 ### Pinning layer versions
 
-`kas.yml` follows the `scarthgap` branch of each upstream layer, so two builds
-made at different times can differ (kas warns about this). To record the exact
-commits, generate a lock file and commit it next to `kas.yml`:
+`kas.yml` follows the `scarthgap` branch of each upstream layer (poky,
+meta-openembedded, meta-raspberrypi). A branch moves whenever upstream pushes
+to it, so two builds made at different times could use different code.
+
+`kas.lock.yml` prevents that. It stores the exact commit of each upstream
+layer, and kas picks it up automatically when it sits next to `kas.yml`, so
+every `kas build kas.yml` checks out the same versions. The commits in the
+lock file are the ones the image was built and tested with on the board.
+
+#### Updating to newer layer versions
+
+Do this on purpose, not by accident:
 
 ```bash
-kas lock kas.yml      # writes kas.lock.yml, picked up automatically by kas
-kas lock --update kas.yml   # later: move to newer upstream commits
+kas lock --update kas.yml    # pull newer commits from the branches, rewrite kas.lock.yml
+git diff kas.lock.yml        # see which layers moved
+kas build kas.yml            # rebuild
 ```
+
+Flash the new image and test it on the board (boot, WiFi, SSH). Only if it
+works, commit the new lock file:
+
+```bash
+git add kas.lock.yml
+git commit -m "Update layer versions"
+```
+
+If the new build or the board misbehaves, go back to the last working
+versions with `git checkout kas.lock.yml`.
+
+After changing the repositories or branches in `kas.yml`, run
+`kas lock kas.yml` again so the lock file matches. The lock file covers only
+the upstream layers, `meta-local` is versioned by this repo's own commits.
 
 ## Flashing and first boot
 
