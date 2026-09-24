@@ -32,3 +32,6 @@ repos:
 local_conf_header:
   license: |
     LICENSE_FLAGS_ACCEPTED = "synaptics-killswitch"
+  debug: |
+    # root bez hasła -- ustawienie robocze, nie dla urządzenia w sieci
+    EXTRA_IMAGE_FEATURES += "debug-tweaks"
