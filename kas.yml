@@ -8,6 +8,8 @@ target: rpi0-synth-image
 repos:
   # to repozytorium (zawiera meta-local)
   meta-local:
+    layers:
+      meta-local:
 
   poky:
     url: https://git.yoctoproject.org/poky
