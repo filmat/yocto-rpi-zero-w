@@ -1,0 +1,13 @@
+# Cudze warstwy (klony upstreamu) -- pobierane przez kas.yml
+/poky/
+/meta-openembedded/
+/meta-raspberrypi/
+
+# Katalog builda kasa
+/build/
+
+# Prywatne notatki robocze
+/yocto-rpi-zero-w-plan.md
+
+# Hashe PSK do prawdziwych sieci WiFi -- wzor w wpa_supplicant.conf-sane.example
+/meta-local/recipes-connectivity/wpa-supplicant/wpa-supplicant/wpa_supplicant.conf-sane

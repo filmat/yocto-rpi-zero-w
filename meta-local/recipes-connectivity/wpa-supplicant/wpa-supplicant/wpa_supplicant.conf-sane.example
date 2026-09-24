@@ -1,0 +1,19 @@
+ctrl_interface=/var/run/wpa_supplicant
+update_config=1
+
+# Skopiuj ten plik jako wpa_supplicant.conf-sane (w tym samym katalogu)
+# i wstaw hashe wygenerowane przez:
+#   wpa_passphrase "SSID" "HASLO" | grep -v '#psk'
+# Wyzszy priority = sieć preferowana.
+
+network={
+	ssid="TWOJA_SIEC_DOMOWA"
+	psk=<64-znakowy-hash-hex>
+	priority=10
+}
+
+network={
+	ssid="HOTSPOT_TELEFONU"
+	psk=<64-znakowy-hash-hex>
+	priority=5
+}
