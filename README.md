@@ -1,9 +1,12 @@
 # Yocto for Raspberry Pi Zero W (MIDI synthesizer)
 
-A Yocto (`scarthgap`) image for the Raspberry Pi Zero W. The long-term goal is
-a simple synthesizer controlled from a USB MIDI keyboard (fluidsynth). For now
-the image provides: a booting system, WiFi that automatically connects to
-saved networks, SSH (dropbear) and a serial console.
+A Yocto (`scarthgap`) image for the Raspberry Pi Zero W that works as a
+simple headless synthesizer. USB MIDI controllers (tested with an Arturia
+KeyStep 37 and an Akai MPK Mini MK3) are connected to fluidsynth
+automatically, and the sound comes out of an I2S DAC (Waveshare PCM5122).
+The synthesizer starts at boot, so it plays without a console or a monitor.
+The image also provides WiFi that automatically connects to saved networks,
+SSH (dropbear) and a serial console.
 
 ## What is in this repo
 
@@ -14,32 +17,55 @@ configure the build. The upstream layers are not stored here.
 ```
 meta-local/
 ├── conf/layer.conf
-├── conf/machine/raspberrypi0-wifi-synth.conf   machine: UART, USB host (dwc2)
-├── recipes-core/images/rpi0-synth-image.bb     image (core-image-minimal + kernel modules + WiFi + SSH)
+├── conf/machine/raspberrypi0-wifi-synth.conf   machine: UART console, USB host (dwc2), I2S DAC overlay
+├── recipes-core/images/rpi0-synth-image.bb     image (core-image-minimal + kernel modules + WiFi + SSH + alsa-utils + fluidsynth + soundfont + autostart)
 ├── recipes-connectivity/wpa-supplicant/        WiFi network configuration
 ├── recipes-core/init-ifupdown/                 wlan0 in /etc/network/interfaces
 ├── recipes-bsp/bootfiles/                      rpi-bootfiles fetch fix (checksum)
-└── recipes-kernel/linux/                       shallow git clone of the kernel
+├── recipes-kernel/linux/                       shallow git clone of the kernel
+└── recipes-multimedia/
+    ├── fluidsynth/                             fluidsynth built with ALSA only (no pulseaudio)
+    ├── soundfonts/                             TimGM6mb soundfont (GPL-2.0), fetched from GitHub
+    └── synth-autostart/                        init script that starts fluidsynth, and synth-connect
 ```
 
 The custom machine `raspberrypi0-wifi-synth` inherits from `raspberrypi0-wifi`
 (meta-raspberrypi) and adds `raspberrypi0-wifi` to `MACHINEOVERRIDES`, so the
-upstream overrides (e.g. the kernel defconfig) keep applying to it.
+upstream overrides (e.g. the kernel defconfig) keep applying to it. It adds
+the `config.txt` lines for the serial console (`disable-bt`, `enable_uart`),
+for USB host mode (`dwc2,dr_mode=host`) and for the sound card
+(`iqaudio-dac`).
 
 ## Hardware
 
 - Raspberry Pi Zero W v1.1
-- Serial console: a USB-TTL adapter wired directly to the GPIO header
-  (pin 6 = GND, 8 = TXD, 10 = RXD), 115200 baud. Bluetooth is disabled
-  (`disable-bt`) so the full UART is on GPIO14/15.
 - Waveshare USB HUB HAT on the GPIO header, connected with a
   microUSB-to-microUSB cable to the board's OTG port. The port runs in host
   mode (`dwc2,dr_mode=host`). **Do not unplug USB devices from it while the
   board is running!** See "Do not unplug USB devices while the board is
   running" in the "Synthesizer" section.
-- Power through the "PWR IN" port.
-- Waveshare PCM5122 Audio Board (A) (I2S DAC) on the GPIO header. It is
-  enabled by the `iqaudio-dac` overlay, the ALSA card is called `IQaudIODAC`.
+- Serial console: the HUB HAT has a CP2102 USB-to-UART converter, reached
+  through its "USB TO UART" micro-USB port (the two switches on the back of
+  the HAT set to ON/ON), 115200 baud. The HAT covers the GPIO header, so an
+  adapter wired to pins 6, 8 and 10 does not fit next to it. Bluetooth is
+  disabled (`disable-bt`) so the full UART is on GPIO14/15. On a Linux host
+  the console shows up as `/dev/ttyUSB0` (the user has to be in the
+  `dialout` group). In a VirtualBox VM the USB filter has to pass the CP2102
+  through, and Windows needs the Silicon Labs CP210x driver.
+- Power: the "PWR IN" port of the board. The "USB TO UART" port of the HAT
+  also powers the board (it started with only that cable connected), and the
+  Waveshare documentation does not say whether the two inputs are protected
+  against each other. Use one power source at a time, and connect the UART
+  cable only when you need the console.
+- Waveshare PCM5122 Audio Board (A) (I2S DAC) on the GPIO header. It has a
+  HAT EEPROM (see `/proc/device-tree/hat/`), but the firmware does not load
+  its overlay by itself. It is enabled by the `iqaudio-dac` overlay, the ALSA
+  card is called `IQaudIODAC`. Active speakers (we used Edifier) are
+  connected to its output.
+- MIDI controllers on the hub: Arturia KeyStep 37 (MIDI channel 15) and
+  Akai MPK Mini MK3 (channel 1). The KeyStep is powered from its own USB
+  charger through the data/power splitter that comes with it, and only the
+  data leg goes to the hub. We do not know whether that leg also carries 5 V.
 
 ## Building
 
@@ -347,6 +373,42 @@ channel 15. According to the fluidsynth documentation, CC 1 (modulation),
 7 (volume), 10 (pan), 11 (expression), 91 (reverb) and 93 (chorus) work out
 of the box. CC 72, 73 and 74 (release, attack, brightness) do not, they need
 custom modulators in the soundfont.
+
+### Using another controller
+
+`synth-connect` does not know the names of the KeyStep and the MPK. It
+connects every hardware MIDI client (a client with `card=` in `aconnect -l`)
+to fluidsynth, so another USB MIDI controller should be connected within
+about `INTERVAL` seconds after it is plugged in. The kernel modules for class
+compliant USB MIDI (`snd-usb-audio`, `snd-usbmidi-lib`) are in the image. Only
+the KeyStep and the MPK were tested, the rest below follows from how the
+scripts work. **Shut the board down before plugging or unplugging a device**
+(see the warning above).
+
+To check a new controller:
+
+```bash
+aconnect -l              # the new client has "card=" and "Connecting To: <fluidsynth client>:0"
+aseqdump -p <client>:0   # play a few notes and watch the events
+```
+
+Things to keep in mind:
+
+- Only port 0 of each controller is connected. A controller with several MIDI
+  ports gets only the first one. If port 0 does not send events, the
+  connection fails, and the error is hidden, so nothing is printed.
+- Devices that need a vendor driver (not class compliant) do not show up as
+  an ALSA client.
+- Fluidsynth accepts all 16 MIDI channels, and by default every channel has
+  the same instrument (`Piano 1`, see `channels` in the shell). The channel the
+  controller sends on decides the sound. Channel 10 (9 when counted from 0) is
+  normally drums in General MIDI, we did not check that in this soundfont.
+- The knobs work only if they send control changes that fluidsynth handles by
+  default (see "MIDI controllers" above). Two controllers on the same channel
+  share the controller state (for example one can change the volume of the
+  other).
+- The hub is powered from the same supply as the board. The KeyStep declares
+  100 mA and the MPK 500 mA. We did not test a controller that draws more.
 
 ### Troubleshooting
 
