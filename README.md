@@ -36,6 +36,8 @@ upstream overrides (e.g. the kernel defconfig) keep applying to it.
   microUSB-to-microUSB cable to the board's OTG port. The port runs in host
   mode (`dwc2,dr_mode=host`).
 - Power through the "PWR IN" port.
+- Waveshare PCM5122 Audio Board (A) (I2S DAC) on the GPIO header. It is
+  enabled by the `iqaudio-dac` overlay, the ALSA card is called `IQaudIODAC`.
 
 ## Building
 
@@ -151,6 +153,35 @@ wpa_cli -i wlan0 reconfigure
 Changes survive reboots but are lost when a new image is flashed. Networks
 that should always be present belong in `wpa_supplicant.conf-sane` in the
 layer.
+
+### Testing the speakers
+
+Check that the sound card is there (`IQaudIODAC` next to `vc4-hdmi`):
+
+```bash
+aplay -l
+```
+
+The DAC starts at full volume (`Digital` = 0 dB), which can be very loud.
+Lower it before playing anything, and turn the volume of your speakers or
+headphones down. A value starting with `-` needs `--` in front of it,
+otherwise `amixer` takes it for an option:
+
+```bash
+amixer -c IQaudIODAC scontrols                     # list the mixer controls
+amixer -c IQaudIODAC sset Digital -- -30dB         # start quiet, raise if needed
+amixer -c IQaudIODAC sget Digital                  # show the current level
+```
+
+Play a short sine wave (one loop, left channel first, then right):
+
+```bash
+speaker-test -D plughw:IQaudIODAC -c 2 -t sine -f 440 -l 1
+```
+
+Use the card name (`IQaudIODAC`) and not its number, the numbers of the ALSA
+cards change with the order in which USB devices are detected. The mixer
+setting is not saved, it goes back to the default after a reboot.
 
 ## License
 
