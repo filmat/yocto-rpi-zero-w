@@ -246,10 +246,15 @@ What we saw on the Zero W with the `dwc2` USB driver (the one in
   waits for the `IQaudIODAC` card, sets the mixer level and starts fluidsynth
   (ALSA audio output, MIDI input from the ALSA sequencer) and `synth-connect`.
   Control it with `/etc/init.d/synth start|stop|restart`.
-- `synth-connect` is a small shell loop. Every 2 seconds it connects every
-  hardware MIDI client (a client with `card=` in `aconnect -l`) to the
-  fluidsynth client, by name. Controllers plugged in after boot are picked up
-  and the ALSA client numbers, which change between boots, do not matter.
+- `synth-connect` is a small shell loop. Every `INTERVAL` seconds (5 by
+  default, a variable at the top of the script) it reads `aconnect -l` once,
+  finds the hardware MIDI clients (a client with `card=`) and the fluidsynth
+  client, and connects only the controllers that are not connected yet. The
+  work is done by one `awk` process, and `aconnect` is called only when
+  something is missing. Controllers plugged in after boot, and connections
+  lost when fluidsynth restarts, are restored within about `INTERVAL`
+  seconds. The clients are matched by name, so the ALSA client numbers, which
+  change between boots, do not matter.
 - The output of fluidsynth goes to `/var/log/synth.log` (in RAM, gone after a
   reboot).
 
@@ -280,6 +285,16 @@ Notes from testing on the board:
   8-note chords fills it up.
 - The CPU headroom is small, we saw about 15% idle at around 40 voices while
   the arpeggiator was running. Do not raise `POLYPHONY` without testing.
+- `synth-connect` has its own setting, `INTERVAL` (seconds between checks,
+  at the top of `files/synth-connect`). Polling is not free on this board. We
+  measured the CPU time of the loop over 60 seconds with nothing playing: the
+  first version (a check every 2 s, two `aconnect -l`, two `sed` and one
+  `aconnect` per controller on every round) used about 6.8% of the single
+  core, more than half of what fluidsynth uses when idle (about 14–16%). The
+  current version (one `aconnect -l` and one `awk` every 5 s) uses about 1.1%.
+  Measured once for each version, on the running board. A controller that is
+  disconnected is connected again within about 5 seconds (2.3 s and 5.2 s in
+  our test, when the connections were removed with `aconnect -d`).
 
 ### Checking that it works
 

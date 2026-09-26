@@ -1,12 +1,32 @@
 #!/bin/sh
 # Łączy sprzętowe porty MIDI z fluidsynth (po nazwach, nie po numerach).
+
+INTERVAL=5    # co ile sekund sprawdzać (im rzadziej, tym mniej CPU)
+
 while true; do
-    FLUID=$(aconnect -l | sed -n "s/^client \([0-9]*\): 'FLUID Synth.*/\1/p")
-    if [ -n "$FLUID" ]; then
-        for c in $(aconnect -l | sed -n 's/^client \([0-9]*\):.*card=.*/\1/p'); do
-            aconnect "$c:0" "$FLUID:0" 2>/dev/null
-        done
-    fi
-    sleep 2
+    # Jedno aconnect -l i jeden awk: wypisuje pary "źródło cel" tylko dla
+    # sprzętowych kontrolerów, które NIE są jeszcze połączone z fluidsynth.
+    aconnect -l | awk '
+        /^client / {
+            id = $2; sub(":", "", id)
+            hw = ($0 ~ /card=/)
+            fl = ($0 ~ /FLUID Synth/)
+            if (hw) hws[++n] = id
+            if (fl) fluid = id
+            next
+        }
+        fl && /Connected From:/ {
+            line = $0; sub(/.*Connected From: */, "", line); gsub(/,/, " ", line)
+            m = split(line, a, " ")
+            for (i = 1; i <= m; i++) connected[a[i]] = 1
+        }
+        END {
+            if (fluid == "") exit
+            for (i = 1; i <= n; i++)
+                if (!((hws[i] ":0") in connected)) print hws[i] ":0", fluid ":0"
+        }' | while read src dst; do
+        aconnect "$src" "$dst" 2>/dev/null
+    done
+    sleep "$INTERVAL"
 done
 
