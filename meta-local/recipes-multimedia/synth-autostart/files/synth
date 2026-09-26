@@ -1,0 +1,59 @@
+#!/bin/sh
+### BEGIN INIT INFO
+# Provides:          synth
+# Required-Start:    $remote_fs
+# Required-Stop:     $remote_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: fluidsynth i automatyczne laczenie kontrolerow MIDI
+### END INIT INFO
+
+PATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin
+
+CARD=IQaudIODAC
+SF2=/usr/share/sounds/sf2/TimGM6mb.sf2
+VOLUME=207        # surowa wartosc Digital: 207 = 0 dB, krok 0,5 dB (201 = -3 dB)
+CONNECT=/usr/bin/synth-connect
+LOG=/var/log/synth.log
+
+# Czeka do 30 s, az karta dzwiekowa sie pojawi (I2S wstaje po starcie).
+wait_for_card() {
+    i=0
+    while [ "$i" -lt 30 ]; do
+        grep -q "$CARD" /proc/asound/cards && return 0
+        sleep 1
+        i=$((i + 1))
+    done
+    return 1
+}
+
+case "$1" in
+  start)
+    echo -n "Starting synth: "
+    wait_for_card || { echo "brak karty $CARD"; exit 1; }
+    amixer -c "$CARD" sset Digital "$VOLUME" >/dev/null
+    # exec: powloka zamienia sie we fluidsynth, wiec PID w pliku to sam fluidsynth
+    # -g 0.5 - default gain was 0.2 - too low
+    start-stop-daemon -S -b -m -p /run/fluidsynth.pid -x /bin/sh -- -c "exec fluidsynth -s -i -g 0.5 -a alsa -m alsa_seq -o audio.alsa.device=plughw:$CARD $SF2 >> $LOG 2>&1"
+    start-stop-daemon -S -b -m -p /run/synth-connect.pid -x "$CONNECT"
+    echo "done."
+    ;;
+  stop)
+    echo -n "Stopping synth: "
+    start-stop-daemon -K -p /run/synth-connect.pid
+    start-stop-daemon -K -p /run/fluidsynth.pid
+    rm -f /run/synth-connect.pid /run/fluidsynth.pid
+    echo "done."
+    ;;
+  restart)
+    "$0" stop
+    sleep 1
+    "$0" start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}" >&2
+    exit 1
+    ;;
+esac
+
+exit 0

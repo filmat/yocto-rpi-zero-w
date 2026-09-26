@@ -1,0 +1,12 @@
+#!/bin/sh
+# Łączy sprzętowe porty MIDI z fluidsynth (po nazwach, nie po numerach).
+while true; do
+    FLUID=$(aconnect -l | sed -n "s/^client \([0-9]*\): 'FLUID Synth.*/\1/p")
+    if [ -n "$FLUID" ]; then
+        for c in $(aconnect -l | sed -n 's/^client \([0-9]*\):.*card=.*/\1/p'); do
+            aconnect "$c:0" "$FLUID:0" 2>/dev/null
+        done
+    fi
+    sleep 2
+done
+
