@@ -34,7 +34,9 @@ upstream overrides (e.g. the kernel defconfig) keep applying to it.
   (`disable-bt`) so the full UART is on GPIO14/15.
 - Waveshare USB HUB HAT on the GPIO header, connected with a
   microUSB-to-microUSB cable to the board's OTG port. The port runs in host
-  mode (`dwc2,dr_mode=host`).
+  mode (`dwc2,dr_mode=host`). **Do not unplug USB devices from it while the
+  board is running!** See "Do not unplug USB devices while the board is
+  running" in the "Synthesizer" section.
 - Power through the "PWR IN" port.
 - Waveshare PCM5122 Audio Board (A) (I2S DAC) on the GPIO header. It is
   enabled by the `iqaudio-dac` overlay, the ALSA card is called `IQaudIODAC`.
@@ -156,6 +158,17 @@ layer.
 
 ### Testing the speakers
 
+The sound card can be opened by one program at a time. While the synth
+service runs (see "Synthesizer" below), fluidsynth holds the card, and
+`speaker-test` or `aplay` fail with `Device or resource busy`. Stop the
+service for the test and start it again afterwards:
+
+```bash
+/etc/init.d/synth stop
+# ... test ...
+/etc/init.d/synth start
+```
+
 Check that the sound card is there (`IQaudIODAC` next to `vc4-hdmi`):
 
 ```bash
@@ -180,8 +193,152 @@ speaker-test -D plughw:IQaudIODAC -c 2 -t sine -f 440 -l 1
 ```
 
 Use the card name (`IQaudIODAC`) and not its number, the numbers of the ALSA
-cards change with the order in which USB devices are detected. The mixer
-setting is not saved, it goes back to the default after a reboot.
+cards change with the order in which USB devices are detected. A mixer level
+set by hand is not saved: the synth service sets `Digital` again (`VOLUME`)
+every time it starts, and without the service it goes back to the default.
+
+## Synthesizer
+
+The image starts fluidsynth at boot and connects the USB MIDI controllers to
+it, so the board plays without a console or a monitor. The recipe is
+`meta-local/recipes-multimedia/synth-autostart/` (init script `synth`, helper
+`synth-connect`). The soundfont comes from `timgm6mb-soundfont` (TimGM6mb,
+GPL-2.0), installed in `/usr/share/sounds/sf2/`.
+
+### Do not unplug USB devices while the board is running!
+
+Unplugging a USB device (we tried the KeyStep) from the hub while the board is
+running can freeze the whole system. **Shut the board down first
+(`poweroff`), then plug or unplug, then power it on again.** Plugging a
+device in is not a problem: it is picked up and connected to fluidsynth by
+`synth-connect` within a few seconds (tested with the KeyStep, and devices
+present at boot are connected too).
+
+What we saw on the Zero W with the `dwc2` USB driver (the one in
+`raspberrypi0-wifi-synth.conf`, as the Waveshare documentation recommends):
+
+- After the KeyStep was unplugged, the kernel printed hundreds to thousands
+  of `usb 1-1.2: urb status -32` errors and only then `USB disconnect`. In
+  our first try that took about 11 seconds, in the second the whole user space
+  stopped for 36 seconds (a logger that writes the time every 0.2 s had a
+  gap of 36 s that ended exactly at the `USB disconnect` message). During
+  that time SSH stopped answering, the speakers popped and packets were lost.
+  After the disconnect was processed the board recovered on its own.
+- The USB controller is very busy even when nothing happens: about 10 000
+  interrupts per second (`20980000.usb, dwc2_hsotg` in `/proc/interrupts`).
+  The controllers (full speed) sit behind a high speed hub, and that needs
+  split transactions, which this driver handles poorly. This is our
+  interpretation, we did not prove it.
+- We also tried the other driver in the kernel (`dwc_otg`, by commenting out
+  `dtoverlay=dwc2,dr_mode=host`). It enumerates the hub and controllers fine
+  and uses fewer interrupts (about 4 850 per second at rest, its FIQ
+  interrupts are not counted), but it was **worse** when a device was
+  unplugged: the board stopped answering completely (no `ping`, no SSH) and
+  did not come back for minutes, only cutting the power helped. Do not switch
+  to it.
+- The exact cause is not identified. A board with a real USB host controller
+  (for example a Raspberry Pi 4B) may not have this problem, but we did not
+  test that.
+
+### How it works
+
+- `/etc/init.d/synth` (linked as `S90synth` in `rc5.d` by `update-rc.d`)
+  waits for the `IQaudIODAC` card, sets the mixer level and starts fluidsynth
+  (ALSA audio output, MIDI input from the ALSA sequencer) and `synth-connect`.
+  Control it with `/etc/init.d/synth start|stop|restart`.
+- `synth-connect` is a small shell loop. Every 2 seconds it connects every
+  hardware MIDI client (a client with `card=` in `aconnect -l`) to the
+  fluidsynth client, by name. Controllers plugged in after boot are picked up
+  and the ALSA client numbers, which change between boots, do not matter.
+- The output of fluidsynth goes to `/var/log/synth.log` (in RAM, gone after a
+  reboot).
+
+### Tuning parameters
+
+The parameters are variables at the top of
+`meta-local/recipes-multimedia/synth-autostart/files/synth`. To change them
+for good, edit that file and rebuild the image. To try a value on a running
+board, edit `/etc/init.d/synth` and run `/etc/init.d/synth restart`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `GAIN` | `0.5` | Master gain of fluidsynth (`-g`). The fluidsynth default of `0.2` is too quiet with this DAC. Too high a value distorts with many voices. |
+| `VOLUME` | `207` | Raw value of the `Digital` mixer control: `207` = 0 dB, one step = 0.5 dB (`201` = -3 dB). |
+| `PERIOD_SIZE` | `256` | Frames in one ALSA period. |
+| `PERIODS` | `4` | Number of periods in the buffer. `256 x 4` = 1024 frames, about 23 ms at 44.1 kHz. |
+| `POLYPHONY` | `64` | Limit of simultaneous voices. |
+
+Notes from testing on the board:
+
+- The fluidsynth default buffer (`64 x 16`) gave underruns (`XRUN`) and
+  dropouts when the KeyStep arpeggiator played chords, even though the CPU was
+  about 55% idle. With `256 x 4` there was no `XRUN` in a 30 second test and
+  the latency was not noticeable when playing.
+- Polyphony counts voices, not notes. One note uses several voices (about 5
+  for one strings program in our test). The fluidsynth default of `256` is
+  too much for the single ARM1176 core, a KeyStep arpeggiator at 120 BPM with
+  8-note chords fills it up.
+- The CPU headroom is small, we saw about 15% idle at around 40 voices while
+  the arpeggiator was running. Do not raise `POLYPHONY` without testing.
+
+### Checking that it works
+
+```bash
+pgrep -l fluidsynth                                 # the process is running
+aconnect -l                                         # KeyStep and MPK show "Connecting To: <fluidsynth client>:0"
+aseqdump -p <client>:0                              # watch the MIDI events of a controller
+grep -E "period_size|buffer_size|rate" /proc/asound/IQaudIODAC/pcm0p/sub0/hw_params
+head -n 1 /proc/asound/IQaudIODAC/pcm0p/sub0/status # RUNNING is fine, XRUN means an underrun
+amixer -c IQaudIODAC sget Digital                   # mixer level
+tail /var/log/synth.log
+```
+
+`aseqdump` and the fluidsynth shell count MIDI channels from 0: the KeyStep
+(channel 15) shows up as `14` and the MPK (channel 1) as `0`.
+
+### The fluidsynth shell over TCP
+
+The service starts fluidsynth with `-s`, so it listens on port 9800 for
+commands. There is no authentication and the port is open on all network
+interfaces, so anyone on the same network can send commands to the synth. This
+is a debugging convenience: remove `-s` from `files/synth` if you do not want
+it. The shell prints no prompt, and BusyBox `nc` has no `-w` option.
+
+```bash
+echo "voice_count" | nc 127.0.0.1 9800      # one command, run it on the board
+nc 127.0.0.1 9800                           # interactive, type a command and press Enter, Ctrl+C to leave
+```
+
+Some useful commands (`help all` lists everything). Changes made in the shell
+last until fluidsynth restarts, permanent ones belong in `files/synth`:
+
+| Command | What it does |
+|---|---|
+| `help`, `help all` | List the command topics or all commands. |
+| `voice_count` | Number of active voices (compare with `POLYPHONY`). |
+| `gain 0.5` | Set the master gain. `get synth.gain` shows the current value. |
+| `get <name>`, `set <name> <value>`, `info <name>` | Read, change or describe a setting, e.g. `get synth.polyphony`. `info` says whether a setting can be changed on the fly (`Real-time: yes`). `settings` lists them all. |
+| `reverb off`, `reverb on`, `chorus off`, `chorus on` | Turn the effects off or on, they cost CPU. |
+| `noteon <chan> <key> <vel>`, `noteoff <chan> <key>` | Play or release a note without a keyboard, e.g. `noteon 0 60 100`. |
+| `cc <chan> <ctrl> <value>`, `prog <chan> <num>` | Send a control change or a program change. |
+| `channels`, `fonts` | Show the instrument on each channel and the loaded soundfonts. |
+| `reset` | Release all notes and reset the controllers (it does not help while a controller, e.g. an arpeggiator, keeps sending notes). |
+
+### MIDI controllers
+
+The MPK Mini MK3 sends on channel 1 and the KeyStep 37 on channel 15. Control
+changes apply per channel, so a KeyStep knob changes only the sound of
+channel 15. According to the fluidsynth documentation, CC 1 (modulation),
+7 (volume), 10 (pan), 11 (expression), 91 (reverb) and 93 (chorus) work out
+of the box. CC 72, 73 and 74 (release, attack, brightness) do not, they need
+custom modulators in the soundfont.
+
+### Troubleshooting
+
+If the sound crackles or stops while an arpeggiator or a long chord is
+playing, look at the state of the card (`status`, `XRUN`) and at
+`voice_count`. Stop the arpeggiator, lower `POLYPHONY`, or turn the reverb
+and chorus off.
 
 ## License
 
